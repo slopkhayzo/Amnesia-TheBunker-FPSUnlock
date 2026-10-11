@@ -1,5 +1,12 @@
 # Amnesia: The Bunker FPS Unlock
 
+> [!WARNING]
+> This patch has been pretty much entirely been generated using AI; 
+> I won't and will never claim to have enough knowledge or expertise to do this 
+> kind of reverse-engineering by myself; I've tested a couple levels (up to the generator room) and so far spotted 
+> no major issues (on my machine ofc, if you have issues feel free to open an Issue).
+> If you're interested and want more (human generated) info, I have a blog post [here](https://slop-blog.enkhayzomachines.net/posts/amnesia-the-bunker-fps-unlock) :)
+
 An ASI plugin that lets the GOG release of *Amnesia: The Bunker* run above the 120 FPS its Framerate option stops at.
 
 Current release: **v1.0.0**
