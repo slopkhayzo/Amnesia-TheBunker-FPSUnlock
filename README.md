@@ -7,18 +7,18 @@
 > no major issues (on my machine ofc, if you have issues feel free to open an Issue).
 > If you're interested and want more (human generated) info, I have a blog post [here](https://slop-blog.enkhayzomachines.net/posts/amnesia-the-bunker-fps-unlock) :)
 
-An ASI plugin that lets the GOG release of *Amnesia: The Bunker* run above the 120 FPS its Framerate option stops at.
+An ASI plugin that lets the GOG and Steam releases of *Amnesia: The Bunker* run above the 120 FPS its Framerate option stops at.
 
-Current release: **v1.0.0**
+Current release: **v1.1.0**
 
 ## How it works
 
 The Bunker runs on a fixed-step engine (HPL3): game logic and physics advance a set number of times per second, and one frame is drawn per update. That number is an ordinary setting. The Framerate menu writes 15, 30, 60 or 120 to `Screen.RefreshRate` and `Engine.GameplayUpdateRate`, and the engine passes the value to its logic timer, which runs on a microsecond clock and has no upper limit of its own. The 120 cap exists only in the menu.
 
-The plugin patches three call sites in the game's settings code, in memory only:
+The plugin patches four call sites in the game's settings code, in memory only:
 
 - The two reads of `Screen.RefreshRate` and `Engine.GameplayUpdateRate` return the rate from `BunkerHighFPS.ini` in place of the value in the settings file.
-- The write of `Engine.GameplayUpdateRate` saves the original file value back, so the plugin's rate never ends up in your settings.
+- The two writes of the same settings, which the game makes whenever it saves its settings (on every exit), save the original file values back, so the plugin's rate never ends up in your settings. Version 1.0.0 protected only `Engine.GameplayUpdateRate`: its `Screen.RefreshRate` followed `iUpdatesPerSec`.
 
 It also corrects physics damping. The Newton physics library removes a fixed fraction of a body's velocity on every step, regardless of step length, so more steps per second means more drag per second. Measured with the game's own `newton.dll`, a body with the common damping value of 0.1 reaches 17.4 m/s after two seconds of free fall at 60 steps per second, but only 10.4 m/s at 360. The plugin intercepts the five Newton imports that create bodies and set or read damping, and converts each value so the velocity lost per second matches the game at 60 updates per second.
 
@@ -26,10 +26,15 @@ This is not interpolation: the game really simulates at the rate you set.
 
 ## Compatibility
 
-- *Amnesia: The Bunker*, GOG release, Windows x64 (GOG build `57301760292462330`)
-- `AmnesiaTheBunker.exe` SHA-256: `377664BA3E6FC84D4F9B04A75A1534868467106E7135FA951167E2C223C2DBD5`
+*Amnesia: The Bunker*, Windows x64:
 
-The plugin does not check the hash. It checks the code at each patch site byte-for-byte before writing anything; on an executable where that fails (another storefront, another version) it changes nothing, the game runs unmodified, and the reason is in `BunkerHighFPS.log`. Only the GOG build above has been tested.
+| Release | Executable | SHA-256 |
+| --- | --- | --- |
+| GOG (build `57301760292462330`) | `AmnesiaTheBunker.exe` | `377664BA3E6FC84D4F9B04A75A1534868467106E7135FA951167E2C223C2DBD5` |
+| Steam | `AmnesiaTheBunker.exe` | `0FF4A67D332FE8490F69D3A8219BACEF120195729A7FCD62B1399455256AE519` |
+| Steam | `AmnesiaTheBunker_NoSteam.exe` | same file as GOG's |
+
+The Steam executable is a separate compile (with Steamworks, no DRM wrapper), so its patch sites are at other addresses; `BunkerHighFPS.log` names the build it found. The plugin does not check the hash. It checks the code at each patch site byte-for-byte before writing anything; on an executable where that fails for every known build (another version) it changes nothing, the game runs unmodified, and the reason is in `BunkerHighFPS.log`.
 
 ## Install
 
@@ -51,7 +56,7 @@ The Framerate option in the game's menu has no effect while the plugin is active
 
 ## Known limits
 
-- Light testing only: a short session at 360 updates per second, from the start of the game to the generator, physics puzzles included, with no problems seen.
+- Light testing only: a short session at 360 updates per second on the GOG build, from the start of the game to the generator, physics puzzles included, with no problems seen. The Steam build has only been tested to the main menu: the plugin finds it, the game runs at the set rate, and quitting leaves the settings file's rates unchanged.
 - The game ships with 60 and 120, so its code adapts to the rate, but parts of it may still be tuned for those two and behave differently at a higher one. Please open an issue for anything that differs from the unmodified game.
 - Physics damping follows the game's 60 setting. At the game's own 120 setting objects are slowed slightly more than that.
 - Your PC has to keep up with the rate you set. If it cannot, the game can run slower than real time.

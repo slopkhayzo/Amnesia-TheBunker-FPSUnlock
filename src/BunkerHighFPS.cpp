@@ -1,5 +1,5 @@
-// BunkerHighFPS - ASI plugin that raises the game update rate of Amnesia: The Bunker (GOG, x64)
-// above the 120 the Framerate menu offers.
+// BunkerHighFPS - ASI plugin that raises the game update rate of Amnesia: The Bunker (GOG and
+// Steam, x64) above the 120 the Framerate menu offers.
 //
 // The Bunker steps its game logic a fixed number of times per second, and that number is a
 // setting: the Framerate menu writes 15/30/60/120 to both Screen.RefreshRate and
@@ -12,8 +12,9 @@
 //
 //   1. Load: the two cConfigFile::GetInt calls in the user-settings loader that read
 //      Screen.RefreshRate and Engine.GameplayUpdateRate return the configured rate.
-//   2. Save: the cConfigFile::SetInt call that writes Engine.GameplayUpdateRate back writes the
-//      value that was read from the file, not the override.
+//   2. Save: the two cConfigFile::SetInt calls that write Screen.RefreshRate and
+//      Engine.GameplayUpdateRate back write the values that were read from the file, not the
+//      override.
 //   3. Physics damping, which Newton applies per step, is converted to the new rate (see
 //      "Newton damping" below).
 //
@@ -27,19 +28,82 @@
 #include <cstring>
 
 #define PLUGIN_NAME        "BunkerHighFPS"
-#define PLUGIN_VERSION_STR "1.0.0"
+#define PLUGIN_VERSION_STR "1.1.0"
 
 // ---------------------------------------------------------------------------------------------
-// AmnesiaTheBunker.exe (GOG build 57301760292462330) addresses, relative to the image base
+// Supported executables. Addresses are relative to the image base. Each patch site is a call
+// instruction, checked together with code next to it; the first build whose every site matches
+// is used.
 
-namespace rva {
-	constexpr uintptr_t kConfigGetInt       = 0x0030F4E0;  // int cConfigFile::GetInt(section, name, default)
-	constexpr uintptr_t kConfigSetInt       = 0x00310DC0;  // void cConfigFile::SetInt(section, name, value)
-	constexpr uintptr_t kLoadRefreshRate    = 0x001080DB;  // call GetInt ; cmp eax,r14d ; ... mov [rbx+7C],eax
-	constexpr uintptr_t kLoadGameplayRate   = 0x0010855E;  // call GetInt ; lea rcx,[rbp-70] ; mov [rbx+84],eax
-	constexpr uintptr_t kSaveGameplayRate   = 0x0010AB67;  // mov r9d,[rsi+84] ; ... ; call SetInt
-	constexpr uintptr_t kGameBase           = 0x0095B4B8;  // game base object: [0] engine, [C0] user settings
-}
+// Bytes expected at an offset from a call site.
+struct Context {
+	int            offset;
+	const uint8_t* bytes;
+	size_t         size;
+};
+
+struct CallSite {
+	uintptr_t rva;
+	Context   context[2];  // unused entries have size 0
+};
+
+struct GameBuild {
+	const char* name;
+	uintptr_t   configGetInt;  // int cConfigFile::GetInt(section, name, default)
+	uintptr_t   configSetInt;  // void cConfigFile::SetInt(section, name, value)
+	uintptr_t   gameBase;      // game base object: [0] engine, [C0] user settings
+	CallSite    loadRefreshRate;
+	CallSite    loadGameplayRate;
+	CallSite    saveRefreshRate;
+	CallSite    saveGameplayRate;
+};
+
+#define CONTEXT(offset, bytes) { offset, bytes, sizeof(bytes) }
+#define BEFORE(bytes) CONTEXT(-(int)sizeof(bytes), bytes)
+#define AFTER(bytes) CONTEXT(5, bytes)
+
+// mov r9d,[rsi+84] ; lea r8,[rsp+20] ; lea rdx,[rsp+60] ; mov rcx,rdi (both builds)
+static const uint8_t kSaveGameplayBefore[] = { 0x44, 0x8B, 0x8E, 0x84, 0x00, 0x00, 0x00, 0x4C, 0x8D, 0x44,
+                                               0x24, 0x20, 0x48, 0x8D, 0x54, 0x24, 0x60, 0x48, 0x8B, 0xCF };
+
+// GOG build 57301760292462330; also AmnesiaTheBunker_NoSteam.exe of the Steam release.
+// cmp eax,r14d ; lea rcx,[rbp-70] ; cmovl eax,r14d ; mov [rbx+7C],eax
+static const uint8_t kGogLoadRefreshAfter[] = { 0x41, 0x3B, 0xC6, 0x48, 0x8D, 0x4D, 0x90, 0x41, 0x0F, 0x4C,
+                                                0xC6, 0x89, 0x43, 0x7C };
+// lea rcx,[rbp-70] ; mov [rbx+84],eax
+static const uint8_t kGogLoadGameplayAfter[] = { 0x48, 0x8D, 0x4D, 0x90, 0x89, 0x83, 0x84, 0x00, 0x00, 0x00 };
+// mov r9d,[rsi+7C] at -6E (the "Screen" / "RefreshRate" strings are then built inline, r9 untouched) ;
+// mov [rsp+26],r15b right before the call
+static const uint8_t kGogSaveRefreshLoad[]   = { 0x44, 0x8B, 0x4E, 0x7C };
+static const uint8_t kGogSaveRefreshBefore[] = { 0x44, 0x88, 0x7C, 0x24, 0x26 };
+
+// Steam AmnesiaTheBunker.exe (the Steamworks build, no DRM wrapper).
+// cmp eax,0F ; cmovl eax,r14d ; mov [rbx+7C],eax
+static const uint8_t kSteamLoadRefreshAfter[] = { 0x83, 0xF8, 0x0F, 0x41, 0x0F, 0x4C, 0xC6, 0x89, 0x43, 0x7C };
+// mov [rbx+84],eax
+static const uint8_t kSteamLoadGameplayAfter[] = { 0x89, 0x83, 0x84, 0x00, 0x00, 0x00 };
+// mov r9d,[rsi+7C] ; lea r8,[rsp+40] ; lea rdx,[rsp+20] ; mov rcx,rdi
+static const uint8_t kSteamSaveRefreshBefore[] = { 0x44, 0x8B, 0x4E, 0x7C, 0x4C, 0x8D, 0x44, 0x24, 0x40,
+                                                   0x48, 0x8D, 0x54, 0x24, 0x20, 0x48, 0x8B, 0xCF };
+
+static const GameBuild kBuilds[] = {
+	{ "GOG", 0x0030F4E0, 0x00310DC0, 0x0095B4B8,
+	  { 0x001080DB, { AFTER(kGogLoadRefreshAfter) } },
+	  { 0x0010855E, { AFTER(kGogLoadGameplayAfter) } },
+	  { 0x0010A3BB, { CONTEXT(-0x6E, kGogSaveRefreshLoad), BEFORE(kGogSaveRefreshBefore) } },
+	  { 0x0010AB67, { BEFORE(kSaveGameplayBefore) } } },
+	{ "Steam", 0x003132C0, 0x00314BA0, 0x009928F8,
+	  { 0x0010DAE1, { AFTER(kSteamLoadRefreshAfter) } },
+	  { 0x0010DF8B, { AFTER(kSteamLoadGameplayAfter) } },
+	  { 0x0011000E, { BEFORE(kSteamSaveRefreshBefore) } },
+	  { 0x0011068B, { BEFORE(kSaveGameplayBefore) } } },
+};
+
+#undef AFTER
+#undef BEFORE
+#undef CONTEXT
+
+static const GameBuild* g_build;
 
 // Offsets used for the read-only status report.
 namespace layout {
@@ -138,6 +202,11 @@ static int Hook_LoadGameplayRate(void* config, void* section, void* name, int de
 	return g_cfg.updatesPerSec;
 }
 
+static void Hook_SaveRefreshRate(void* config, void* section, void* name, int value)
+{
+	OrigConfigSetInt(config, section, name, g_fileRefreshRate > 0 ? g_fileRefreshRate : value);
+}
+
 static void Hook_SaveGameplayRate(void* config, void* section, void* name, int value)
 {
 	OrigConfigSetInt(config, section, name, g_fileGameplayRate > 0 ? g_fileGameplayRate : value);
@@ -198,35 +267,29 @@ static bool RedirectCall(uintptr_t callAt, const void* hook)
 	return WriteBytes(callAt + 1, &rel32, sizeof(rel32));
 }
 
-static bool VerifyGame()
+static bool SiteMatches(const CallSite& site, uintptr_t callee)
 {
-	const uintptr_t getInt = g_base + rva::kConfigGetInt;
-	const uintptr_t setInt = g_base + rva::kConfigSetInt;
-
-	// call GetInt ; cmp eax,r14d ; lea rcx,[rbp-70] ; cmovl eax,r14d ; mov [rbx+7C],eax
-	const uint8_t afterRefresh[] = { 0x41, 0x3B, 0xC6, 0x48, 0x8D, 0x4D, 0x90, 0x41, 0x0F, 0x4C, 0xC6,
-	                                 0x89, 0x43, 0x7C };
-	if (!IsCallTo(g_base + rva::kLoadRefreshRate, getInt) ||
-	    !BytesMatch(g_base + rva::kLoadRefreshRate + 5, afterRefresh, sizeof(afterRefresh))) {
-		Log("ERROR: Screen.RefreshRate load does not match (wrong AmnesiaTheBunker.exe version?)");
-		return false;
-	}
-	// call GetInt ; lea rcx,[rbp-70] ; mov [rbx+84],eax
-	const uint8_t afterGameplay[] = { 0x48, 0x8D, 0x4D, 0x90, 0x89, 0x83, 0x84, 0x00, 0x00, 0x00 };
-	if (!IsCallTo(g_base + rva::kLoadGameplayRate, getInt) ||
-	    !BytesMatch(g_base + rva::kLoadGameplayRate + 5, afterGameplay, sizeof(afterGameplay))) {
-		Log("ERROR: Engine.GameplayUpdateRate load does not match");
-		return false;
-	}
-	// mov r9d,[rsi+84] ; lea r8,[rsp+20] ; lea rdx,[rsp+60] ; mov rcx,rdi ; call SetInt
-	const uint8_t beforeSave[] = { 0x44, 0x8B, 0x8E, 0x84, 0x00, 0x00, 0x00, 0x4C, 0x8D, 0x44, 0x24, 0x20,
-	                               0x48, 0x8D, 0x54, 0x24, 0x60, 0x48, 0x8B, 0xCF };
-	if (!IsCallTo(g_base + rva::kSaveGameplayRate, setInt) ||
-	    !BytesMatch(g_base + rva::kSaveGameplayRate - sizeof(beforeSave), beforeSave, sizeof(beforeSave))) {
-		Log("ERROR: Engine.GameplayUpdateRate save does not match");
-		return false;
-	}
+	const uintptr_t at = g_base + site.rva;
+	if (!IsCallTo(at, g_base + callee)) return false;
+	for (const Context& c : site.context)
+		if (c.size && !BytesMatch(at + c.offset, c.bytes, c.size)) return false;
 	return true;
+}
+
+// Returns the first supported build whose every patch site matches, or null.
+static const GameBuild* FindBuild()
+{
+	for (const GameBuild& b : kBuilds) {
+		const bool loadRefresh  = SiteMatches(b.loadRefreshRate, b.configGetInt);
+		const bool loadGameplay = SiteMatches(b.loadGameplayRate, b.configGetInt);
+		const bool saveRefresh  = SiteMatches(b.saveRefreshRate, b.configSetInt);
+		const bool saveGameplay = SiteMatches(b.saveGameplayRate, b.configSetInt);
+		if (loadRefresh && loadGameplay && saveRefresh && saveGameplay) return &b;
+		Log("not the %s build (sites matching: RefreshRate load %d, GameplayUpdateRate load %d, "
+		    "RefreshRate save %d, GameplayUpdateRate save %d)", b.name, loadRefresh, loadGameplay,
+		    saveRefresh, saveGameplay);
+	}
+	return nullptr;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -355,7 +418,7 @@ static bool ReadEngineState(int* settingsRefresh, int* settingsGameplay, int* ti
                             uint8_t* limitFPS)
 {
 	uintptr_t gameBase, engine, settings, timer;
-	return ReadAt(g_base + rva::kGameBase, &gameBase) &&
+	return ReadAt(g_base + g_build->gameBase, &gameBase) &&
 	       ReadAt(gameBase + layout::kBaseEngine, &engine) &&
 	       ReadAt(gameBase + layout::kBaseSettings, &settings) &&
 	       ReadAt(settings + layout::kSettingsRefresh, settingsRefresh) &&
@@ -393,10 +456,12 @@ static void Install()
 	}
 
 	g_base = (uintptr_t)GetModuleHandleA(nullptr);
-	if (!VerifyGame()) {
-		Log("Plugin disabled; no changes made.");
+	g_build = FindBuild();
+	if (!g_build) {
+		Log("ERROR: unsupported AmnesiaTheBunker.exe version. Plugin disabled; no changes made.");
 		return;
 	}
+	Log("game build: %s", g_build->name);
 
 	int state[4];
 	uint8_t limit;
@@ -408,11 +473,12 @@ static void Install()
 		Log("ERROR: could not allocate memory near the executable; plugin disabled");
 		return;
 	}
-	OrigConfigGetInt = (ConfigGetInt_t)(g_base + rva::kConfigGetInt);
-	OrigConfigSetInt = (ConfigSetInt_t)(g_base + rva::kConfigSetInt);
-	if (!RedirectCall(g_base + rva::kLoadRefreshRate, (const void*)&Hook_LoadRefreshRate) ||
-	    !RedirectCall(g_base + rva::kLoadGameplayRate, (const void*)&Hook_LoadGameplayRate) ||
-	    !RedirectCall(g_base + rva::kSaveGameplayRate, (const void*)&Hook_SaveGameplayRate)) {
+	OrigConfigGetInt = (ConfigGetInt_t)(g_base + g_build->configGetInt);
+	OrigConfigSetInt = (ConfigSetInt_t)(g_base + g_build->configSetInt);
+	if (!RedirectCall(g_base + g_build->loadRefreshRate.rva, (const void*)&Hook_LoadRefreshRate) ||
+	    !RedirectCall(g_base + g_build->loadGameplayRate.rva, (const void*)&Hook_LoadGameplayRate) ||
+	    !RedirectCall(g_base + g_build->saveRefreshRate.rva, (const void*)&Hook_SaveRefreshRate) ||
+	    !RedirectCall(g_base + g_build->saveGameplayRate.rva, (const void*)&Hook_SaveGameplayRate)) {
 		Log("ERROR: could not redirect the settings calls");
 		return;
 	}

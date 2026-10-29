@@ -20,14 +20,15 @@ its code adapts to the rate, but rates above 120 were never tested by its
 developers. See "Known limits".
 
 
-Supported game build
---------------------
-The 64-bit GOG release of Amnesia: The Bunker (AmnesiaTheBunker.exe, GOG build
-57301760292462330). It is the only build this was developed and tested on.
+Supported game builds
+---------------------
+The 64-bit Amnesia: The Bunker from GOG (AmnesiaTheBunker.exe, GOG build
+57301760292462330) and from Steam (AmnesiaTheBunker.exe and
+AmnesiaTheBunker_NoSteam.exe). The log names the build it found.
 
 Before changing anything the plugin checks the code it patches. On any other
-executable (another storefront, another version) the check fails, the plugin
-changes nothing, the game runs unmodified and the reason is in the log.
+executable (another version) the check fails, the plugin changes nothing, the
+game runs unmodified and the reason is in the log.
 
 
 Choose an installation
